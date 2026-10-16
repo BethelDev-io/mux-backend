@@ -1,107 +1,8 @@
-import { KeyType, KeyOperation } from './key-types';
+import { KeyOperation } from './key-types';
+import { KeyManagementErrorCode } from './key-management.errors';
 
 /**
- * Basic key management statistics.
- */
-export interface KeyStatistics {
-  /** Total number of keys generated */
-  totalKeysGenerated: number;
-
-  /** Total number of signing operations */
-  totalSigningOperations: number;
-
-  /** Total number of validation operations */
-  totalValidations: number;
-
-  /** Total number of failed operations */
-  totalFailures: number;
-
-  /** Keys grouped by type */
-  keysByType: Record<KeyType, number>;
-
-  /** Operations grouped by type */
-  operationsByType: Record<KeyOperation, number>;
-
-  /** Overall success rate (percentage) */
-  successRate: number;
-
-  /** Timestamp of the last operation */
-  lastOperation: string | null;
-
-  /** Start of the period */
-  periodStart: string;
-
-  /** End of the period */
-  periodEnd: string;
-}
-
-/**
- * Per-operation metrics for detailed statistics.
- */
-export interface OperationMetrics {
-  /** The operation type */
-  operation: KeyOperation;
-
-  /** Total count of this operation */
-  count: number;
-
-  /** Number of successful operations */
-  successCount: number;
-
-  /** Number of failed operations */
-  failureCount: number;
-
-  /** Success rate for this operation type (percentage) */
-  successRate: number;
-}
-
-/**
- * Recent operation entry.
- */
-export interface RecentOperation {
-  /** The operation type */
-  operation: KeyOperation;
-
-  /** ISO timestamp of the operation */
-  timestamp: string;
-
-  /** Whether the operation succeeded */
-  success: boolean;
-
-  /** The key type */
-  keyType: KeyType;
-}
-
-/**
- * Time series data point (hourly aggregation).
- */
-export interface TimeSeriesPoint {
-  /** Hour bucket timestamp (start of hour) */
-  timestamp: string;
-
-  /** Number of operations in this hour */
-  count: number;
-
-  /** The operation type */
-  operation: KeyOperation;
-}
-
-/**
- * Detailed key management statistics with extended metrics.
- */
-export interface DetailedKeyStatistics extends KeyStatistics {
-  /** Per-operation metrics */
-  operationMetrics: OperationMetrics[];
-
-  /** Recent operations (last 10) */
-  recentOperations: RecentOperation[];
-
-  /** Optional hourly time series data */
-  timeSeries?: TimeSeriesPoint[];
-}
-
-/**
- * Query parameters for statistics.
+ * Parameters for querying key statistics.
  */
 export interface StatisticsQueryParams {
   /** Start date (ISO string) */
@@ -113,16 +14,119 @@ export interface StatisticsQueryParams {
   /** Filter by operation type */
   operation?: KeyOperation;
 
-  /** Include time series data (detailed only) */
+  /** Whether to include time series data */
   includeTimeSeries?: boolean;
 }
 
 /**
- * Internal audit entry used for computing statistics.
+ * Error thrown when statistics query params are invalid.
  */
-export interface AuditEntry {
+export class InvalidStatisticsQueryError extends Error {
+  readonly errorCode = KeyManagementErrorCode.INVALID_INPUT;
+
+  constructor(message: string) {
+    super(message);
+    this.name = 'InvalidStatisticsQueryError';
+  }
+}
+
+/**
+ * Validates and normalizes statistics query params.
+ *
+ * Rejects unparseable ISO dates, inverted ranges, and operation values
+ * outside the KeyOperation enum. Returns the parsed bounds so callers can
+ * guarantee periodStart/periodEnd match the requested range.
+ */
+export function validateStatisticsQueryParams(params: StatisticsQueryParams): {
+  startDate?: Date;
+  endDate?: Date;
+} {
+  let startDate: Date | undefined;
+  let endDate: Date | undefined;
+
+  if (params.startDate !== undefined) {
+    startDate = new Date(params.startDate);
+    if (Number.isNaN(startDate.getTime())) {
+      throw new InvalidStatisticsQueryError(
+        `Invalid startDate: ${params.startDate}`,
+      );
+    }
+  }
+
+  if (params.endDate !== undefined) {
+    endDate = new Date(params.endDate);
+    if (Number.isNaN(endDate.getTime())) {
+      throw new InvalidStatisticsQueryError(
+        `Invalid endDate: ${params.endDate}`,
+      );
+    }
+  }
+
+  if (startDate && endDate && startDate.getTime() > endDate.getTime()) {
+    throw new InvalidStatisticsQueryError(
+      'startDate must not be after endDate',
+    );
+  }
+
+  if (
+    params.operation !== undefined &&
+    !Object.values(KeyOperation).includes(params.operation)
+  ) {
+    throw new InvalidStatisticsQueryError(
+      `Invalid operation: ${params.operation}`,
+    );
+  }
+
+  return { startDate, endDate };
+}
+
+/**
+ * Aggregated statistics for key operations over a period.
+ */
+export interface KeyStatistics {
+  /** Total number of operations */
+  totalOperations: number;
+
+  /** Number of successful operations */
+  successfulOperations: number;
+
+  /** Number of failed operations */
+  failedOperations: number;
+
+  /** ISO timestamp of the start of the period */
+  periodStart: string;
+
+  /** ISO timestamp of the end of the period */
+  periodEnd: string;
+}
+
+/**
+ * Per-operation metrics.
+ */
+export interface OperationMetrics {
+  /** The operation type */
   operation: KeyOperation;
-  keyType: KeyType;
-  timestamp: string;
-  success: boolean;
+
+  /** Total number of operations */
+  total: number;
+
+  /** Number of successful operations */
+  successful: number;
+
+  /** Number of failed operations */
+  failed: number;
+}
+
+/**
+ * Detailed statistics including per-operation metrics and recent operations.
+ */
+export interface DetailedKeyStatistics extends KeyStatistics {
+  /** Per-operation metrics */
+  operationMetrics: OperationMetrics[];
+
+  /** Recent operations */
+  recentOperations: unknown[];
+
+  /** Optional time series data */
+  timeSeries?: unknown[];
 }

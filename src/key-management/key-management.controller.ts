@@ -6,14 +6,17 @@ import {
   Query,
   HttpCode,
   HttpStatus,
+  BadRequestException,
 } from '@nestjs/common';
 import { KeyManagementService } from './key-management.service';
 import { KeyRotationAuditService } from './key-rotation-audit.service';
 import { KeyType, KeyOperation } from './domain/key-types';
 import {
   DetailedKeyStatistics,
+  InvalidStatisticsQueryError,
   KeyStatistics,
   StatisticsQueryParams,
+  validateStatisticsQueryParams,
 } from './domain/key-statistics';
 import {
   GenerateKeyInput,
@@ -118,6 +121,8 @@ export class KeyManagementController {
       operation,
     };
 
+    this.assertValidStatisticsQuery(params);
+
     const stats = this.keyManagementService.getStatistics(params);
 
     return { success: true, data: stats };
@@ -142,8 +147,29 @@ export class KeyManagementController {
       includeTimeSeries: includeTimeSeries === 'true',
     };
 
+    this.assertValidStatisticsQuery(params);
+
     const stats = this.keyManagementService.getDetailedStatistics(params);
 
     return { success: true, data: stats };
+  }
+
+  // -----------------------------------------------------------------------
+  // Helpers
+  // -----------------------------------------------------------------------
+
+  private assertValidStatisticsQuery(params: StatisticsQueryParams): void {
+    try {
+      validateStatisticsQueryParams(params);
+    } catch (error) {
+      if (error instanceof InvalidStatisticsQueryError) {
+        throw new BadRequestException({
+          errorCode: error.errorCode,
+          message: error.message,
+        });
+      }
+
+      throw error;
+    }
   }
 }
