@@ -38,6 +38,8 @@ export enum ErrorCode {
   // Key management / custody (fail-closed)
   KEY_DECRYPT_FAILED = 'KEY_DECRYPT_FAILED',
   KEY_VERSION_UNSUPPORTED = 'KEY_VERSION_UNSUPPORTED',
+  /** Requested key type has no implementation and is refused (#1075). */
+  KEY_TYPE_UNSUPPORTED = 'KEY_TYPE_UNSUPPORTED',
 
   // Transaction export (secure downloads)
   EXPORT_JOB_NOT_FOUND = 'EXPORT_JOB_NOT_FOUND',
@@ -239,6 +241,7 @@ export const DEFAULT_STATUS_BY_CODE: Record<ErrorCode, number> = {
   [ErrorCode.SHUTDOWN_IN_PROGRESS]: 503,
   [ErrorCode.KEY_DECRYPT_FAILED]: 503,
   [ErrorCode.KEY_VERSION_UNSUPPORTED]: 503,
+  [ErrorCode.KEY_TYPE_UNSUPPORTED]: 503,
   [ErrorCode.EXPORT_JOB_NOT_FOUND]: 404,
   [ErrorCode.EXPORT_NOT_READY]: 409,
   [ErrorCode.EXPORT_DOWNLOAD_FORBIDDEN]: 403,
@@ -282,17 +285,19 @@ const GENERIC_MESSAGE_BY_CODE: Record<ErrorCode, string> = {
     'Key material could not be decrypted; operation refused.',
   [ErrorCode.KEY_VERSION_UNSUPPORTED]:
     'Key version is not supported; operation refused.',
+  [ErrorCode.KEY_TYPE_UNSUPPORTED]:
+    'Key type is not supported; operation refused.',
   [ErrorCode.EXPORT_JOB_NOT_FOUND]: 'Transaction export job not found.',
   [ErrorCode.EXPORT_NOT_READY]: 'Transaction export is not ready for download.',
   [ErrorCode.EXPORT_DOWNLOAD_FORBIDDEN]:
     'You are not allowed to download this export.',
-  [ErrorCode.EXPORT_DOWNLOAD_EXPIRED]: 'This export download has expired.',
+  [ErrorCode.EXPORT_DOWNLOAD_EXPIRED]: 'This export download link has expired.',
   [ErrorCode.EXPORT_TOO_LARGE]: 'The requested export is too large.',
   [ErrorCode.BACKUP_NOT_FOUND]: 'Backup not found.',
   [ErrorCode.BACKUP_NOT_READY]: 'Backup is not ready.',
   [ErrorCode.BACKUP_IN_PROGRESS]: 'A backup is already in progress.',
   [ErrorCode.BACKUP_INTEGRITY_FAILED]: 'Backup integrity check failed.',
-  [ErrorCode.RESTORE_FORBIDDEN]: 'You are not allowed to restore backups.',
+  [ErrorCode.RESTORE_FORBIDDEN]: 'You are not allowed to restore this backup.',
   [ErrorCode.RESTORE_CONFLICT]: 'Restore conflicts with current state.',
   [ErrorCode.RESTORE_IN_PROGRESS]: 'A restore is already in progress.',
   [ErrorCode.RESTORE_POINT_INVALID]: 'The restore point is invalid.',
@@ -300,3 +305,21 @@ const GENERIC_MESSAGE_BY_CODE: Record<ErrorCode, string> = {
   [ErrorCode.UNAUTHENTICATED]: 'Authentication required.',
   [ErrorCode.RATE_LIMITED]: 'Too many requests.',
 };
+
+/**
+ * Served error-code catalog (#949). Maps every `ErrorCode` to its canonical
+ * HTTP status and client-safe message so the catalog-coverage test can assert
+ * that no code is missing from the served contract.
+ */
+export const ERROR_CODE_CATALOG: Record<
+  ErrorCode,
+  { statusCode: number; message: string }
+> = Object.fromEntries(
+  (Object.values(ErrorCode) as ErrorCode[]).map((code) => [
+    code,
+    {
+      statusCode: DEFAULT_STATUS_BY_CODE[code],
+      message: GENERIC_MESSAGE_BY_CODE[code],
+    },
+  ]),
+) as Record<ErrorCode, { statusCode: number; message: string }>;
