@@ -40,6 +40,19 @@ describe('ErrorCodeCatalog', () => {
       missingFromCatalog: missingFromCatalog.sort(),
       extraInCatalog: extraInCatalog.sort(),
     }).toEqual({ missingFromCatalog: [], extraInCatalog: [] });
+
+    for (const code of Object.values(ErrorCode)) {
+      const entry = getErrorCodeEntry(code);
+
+      expect(entry).toBeDefined();
+      expect(entry?.code).toBe(code);
+      expect(typeof entry?.httpStatus).toBe('number');
+      expect(Number.isFinite(entry?.httpStatus)).toBe(true);
+      expect(typeof entry?.message).toBe('string');
+      expect(entry?.message.length).toBeGreaterThan(0);
+      expect(entry?.category).toBeDefined();
+      expect(entry?.action).toBeDefined();
+    }
   });
 
   it('agrees with the envelope builder on the HTTP status for every code', () => {
