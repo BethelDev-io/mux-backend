@@ -23,6 +23,25 @@ describe('ErrorCodeCatalog', () => {
     expect([...catalogCodes].sort()).toEqual([...enumCodes].sort());
   });
 
+  it('covers every ErrorCode member with a catalog entry (no missing/extra codes)', () => {
+    const catalogCodes = new Set<string>(
+      ERROR_CODE_CATALOG.map((entry) => entry.code),
+    );
+    const enumCodes = new Set<string>(Object.values(ErrorCode));
+
+    const missingFromCatalog = [...enumCodes].filter(
+      (code) => !catalogCodes.has(code),
+    );
+    const extraInCatalog = [...catalogCodes].filter(
+      (code) => !enumCodes.has(code),
+    );
+
+    expect({
+      missingFromCatalog: missingFromCatalog.sort(),
+      extraInCatalog: extraInCatalog.sort(),
+    }).toEqual({ missingFromCatalog: [], extraInCatalog: [] });
+  });
+
   it('agrees with the envelope builder on the HTTP status for every code', () => {
     for (const entry of ERROR_CODE_CATALOG) {
       expect(entry.httpStatus).toBe(DEFAULT_STATUS_BY_CODE[entry.code]);
