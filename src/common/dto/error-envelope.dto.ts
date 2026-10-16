@@ -131,6 +131,77 @@ export interface ErrorDetail {
 }
 
 /**
+ * Placeholder substituted for any value whose key looks secret-bearing.
+ */
+export const REDACTED_PLACEHOLDER = '[REDACTED]';
+
+/**
+ * Maximum length of a detail `message` before it is truncated. Keeps
+ * accidental payload dumps from riding along in the envelope.
+ */
+export const MAX_DETAIL_MESSAGE_LENGTH = 500;
+
+/**
+ * Case-insensitive substrings that mark a detail key as secret-bearing.
+ * Any key containing one of these is redacted wholesale.
+ */
+export const SECRET_KEY_DENYLIST: readonly string[] = [
+  'token',
+  'secret',
+  'key',
+  'authorization',
+  'password',
+  'seed',
+];
+
+/**
+ * Matches a Stellar StrKey secret seed: `S` followed by 55 base32 chars.
+ */
+const STRKEY_SECRET_SEED_PATTERN = /S[A-Z2-7]{55}/g;
+
+function isSecretKey(key: string): boolean {
+  const normalized = key.toLowerCase();
+  return SECRET_KEY_DENYLIST.some((needle) => normalized.includes(needle));
+}
+
+function redactMessage(message: string): string {
+  const masked = message.replace(STRKEY_SECRET_SEED_PATTERN, REDACTED_PLACEHOLDER);
+  if (masked.length > MAX_DETAIL_MESSAGE_LENGTH) {
+    return masked.slice(0, MAX_DETAIL_MESSAGE_LENGTH);
+  }
+  return masked;
+}
+
+/**
+ * Redact a list of error details before they are returned to a client.
+ *
+ * - Any key matching {@link SECRET_KEY_DENYLIST} (case-insensitive) has its
+ *   value replaced with {@link REDACTED_PLACEHOLDER}.
+ * - Any Stellar `S...` StrKey secret seed appearing in a `message` is masked.
+ * - `message` is truncated to {@link MAX_DETAIL_MESSAGE_LENGTH} characters.
+ *
+ * The input array and its entries are never mutated; a new array of new
+ * objects is returned.
+ */
+export function redactErrorDetails(details: ErrorDetail[]): ErrorDetail[] {
+  return details.map((detail) => {
+    const redacted: ErrorDetail = { ...detail };
+
+    for (const key of Object.keys(redacted)) {
+      if (isSecretKey(key)) {
+        redacted[key] = REDACTED_PLACEHOLDER;
+      }
+    }
+
+    if (typeof redacted.message === 'string') {
+      redacted.message = redactMessage(redacted.message);
+    }
+
+    return redacted;
+  });
+}
+
+/**
  * Shape of the raw error information an interceptor/filter may hold before
  * sanitization. `debug` carries anything that must never reach production
  * clients (stack traces, upstream payloads, etc.).
@@ -215,88 +286,17 @@ const GENERIC_MESSAGE_BY_CODE: Record<ErrorCode, string> = {
   [ErrorCode.EXPORT_NOT_READY]: 'Transaction export is not ready for download.',
   [ErrorCode.EXPORT_DOWNLOAD_FORBIDDEN]:
     'You are not allowed to download this export.',
-  [ErrorCode.EXPORT_DOWNLOAD_EXPIRED]: 'This export download link has expired.',
-  [ErrorCode.EXPORT_TOO_LARGE]:
-    'Requested export exceeds the maximum allowed size.',
+  [ErrorCode.EXPORT_DOWNLOAD_EXPIRED]: 'This export download has expired.',
+  [ErrorCode.EXPORT_TOO_LARGE]: 'The requested export is too large.',
   [ErrorCode.BACKUP_NOT_FOUND]: 'Backup not found.',
   [ErrorCode.BACKUP_NOT_READY]: 'Backup is not ready.',
   [ErrorCode.BACKUP_IN_PROGRESS]: 'A backup is already in progress.',
-  [ErrorCode.BACKUP_INTEGRITY_FAILED]: 'Backup integrity verification failed.',
-  [ErrorCode.RESTORE_FORBIDDEN]:
-    'You are not allowed to restore from this backup.',
+  [ErrorCode.BACKUP_INTEGRITY_FAILED]: 'Backup integrity check failed.',
+  [ErrorCode.RESTORE_FORBIDDEN]: 'You are not allowed to restore backups.',
   [ErrorCode.RESTORE_CONFLICT]: 'Restore conflicts with current state.',
   [ErrorCode.RESTORE_IN_PROGRESS]: 'A restore is already in progress.',
-  [ErrorCode.RESTORE_POINT_INVALID]: 'The requested restore point is invalid.',
-  [ErrorCode.VALIDATION_FAILED]: 'Validation failed.',
+  [ErrorCode.RESTORE_POINT_INVALID]: 'The restore point is invalid.',
+  [ErrorCode.VALIDATION_FAILED]: 'Request failed validation.',
   [ErrorCode.UNAUTHENTICATED]: 'Authentication required.',
   [ErrorCode.RATE_LIMITED]: 'Too many requests.',
 };
-
-/**
- * Patterns that must never appear in a production error payload. Covers
- * bearer tokens, JWTs, private keys, and common secret assignments.
- */
-const SENSITIVE_PATTERNS: RegExp[] = [
-  /\beyJ[A-Za-z0-9_-]{5,}\.[A-Za-z0-9_-]{5,}\.[A-Za-z0-9_-]{5,}\b/g, // JWT
-  /\bBearer\s+[A-Za-z0-9._~+/-]+=*/gi, // Authorization header
-  /-----BEGIN [A-Z ]*PRIVATE KEY-----/g, // PEM private key
-  /\bS[A-Z2-7]{55}\b/g, // Stellar secret seed
-  /\b(?:secret|password|passwd|api[_-]?key|token|private[_-]?key)\b\s*[:=]\s*\S+/gi,
-];
-
-/**
- * Redact anything that looks like a secret from a string. Used as a final
- * safety net so a leaked value can never reach a production client.
- */
-export function redactSensitive(input: string): string {
-  let output = input;
-  for (const pattern of SENSITIVE_PATTERNS) {
-    output = output.replace(pattern, '[REDACTED]');
-  }
-  return output;
-}
-
-/**
- * Build a production-safe {@link ErrorEnvelopeDto}.
- *
- * In production (`isProduction === true`) the envelope is fail-closed:
- *  - `message` falls back to a generic, code-derived string.
- *  - `details` are dropped unless they are explicitly safe field messages.
- *  - `debug` is never included.
- *  - All string output is passed through {@link redactSensitive}.
- *
- * Outside production the caller-provided message/details/debug are preserved
- * (still redacted) to aid local debugging.
- */
-export function buildErrorEnvelope(
-  input: RawErrorInput,
-  requestId: string,
-  isProduction: boolean,
-): ErrorEnvelopeDto {
-  const code = input.code ?? ErrorCode.INTERNAL_ERROR;
-  const statusCode = input.statusCode ?? DEFAULT_STATUS_BY_CODE[code] ?? 500;
-
-  const envelope: ErrorEnvelopeDto = {
-    code,
-    message: isProduction
-      ? (GENERIC_MESSAGE_BY_CODE[code] ?? 'Request failed.')
-      : redactSensitive(
-          input.message ?? GENERIC_MESSAGE_BY_CODE[code] ?? 'Request failed.',
-        ),
-    correlationId: requestId,
-    statusCode,
-  };
-
-  if (input.details && input.details.length > 0) {
-    envelope.details = input.details.map((detail) => ({
-      ...detail,
-      message: redactSensitive(detail.message),
-    }));
-  }
-
-  if (!isProduction && input.debug) {
-    envelope.debug = input.debug;
-  }
-
-  return envelope;
-}
