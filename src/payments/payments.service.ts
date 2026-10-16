@@ -31,7 +31,8 @@ const ALLOWED_TRANSITIONS: Record<string, PaymentStatus[]> = {
  *  - update() validates every status mutation against ALLOWED_TRANSITIONS so terminal
  *    states (CONFIRMED, FAILED) are genuinely immutable.
  *  - Idempotency key uniqueness is enforced at the DB level; the service returns the
- *    cached response instead of re-executing on conflict.
+ *    cached response instead of re-executing on conflict, but only when the cached
+ *    payment belongs to the requesting developer.
  *  - Feature-flagged: if PAYMENT_ISOLATION_ENABLED !== 'true' the guard is bypassed
  *    in development to allow gradual rollout without breaking existing callers.
  */
@@ -86,8 +87,22 @@ export class PaymentsService {
         where: { idempotencyKey },
       });
       if (existing) {
+        // #1100 – only replay when the cached payment belongs to the requesting
+        // developer. A key collision across developers must not leak the record.
+        if (
+          this.isolationEnabled &&
+          developerOwnerId &&
+          existing.developerOwnerId !== developerOwnerId
+        ) {
+          this.logger.warn(
+            `Idempotency key collision across developers for key=${idempotencyKey}`,
+          );
+          throw new NotFoundException(
+            `Wallet ${walletId} not found for this developer`,
+          );
+        }
         this.logger.log(
-          `Idempotent replay detected for key=${idempotencyKey}, returning cached payment id=${existing.id}`,
+          `Idempotent replay detected for key=${idempotencyKey}, returning cached payment`,
         );
         return existing;
       }
