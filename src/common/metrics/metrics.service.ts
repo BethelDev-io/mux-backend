@@ -11,6 +11,32 @@ interface MetricSeries {
 @Injectable()
 export class MetricsService {
   private readonly logger = new Logger(MetricsService.name);
+  private hasWarnedAboutTruncation = false;
+
+  /**
+   * Sanitizes a metric label so it is safe to use as a metric name.
+   *
+   * Illegal characters are replaced with `_` and the result is truncated to
+   * {@link MAX_METRIC_NAME_LENGTH} characters. Truncation is deterministic
+   * (a simple prefix) and a one-time warning is logged the first time it
+   * happens.
+   */
+  sanitizeLabel(label: string): string {
+    const sanitized = label.replace(/[^A-Za-z0-9_:.-]/g, '_');
+
+    if (sanitized.length <= MAX_METRIC_NAME_LENGTH) {
+      return sanitized;
+    }
+
+    if (!this.hasWarnedAboutTruncation) {
+      this.hasWarnedAboutTruncation = true;
+      this.logger.warn(
+        `Metric name exceeded ${MAX_METRIC_NAME_LENGTH} characters and was truncated`,
+      );
+    }
+
+    return sanitized.slice(0, MAX_METRIC_NAME_LENGTH);
+  }
 
   /**
    * In-memory counter registry so exported values can be scraped/asserted.

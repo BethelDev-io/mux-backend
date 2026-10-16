@@ -23,7 +23,24 @@ describe('ErrorCodeCatalog', () => {
     expect([...catalogCodes].sort()).toEqual([...enumCodes].sort());
   });
 
-  it('has a valid catalog entry for every ErrorCode enum member', () => {
+  it('covers every ErrorCode member with a catalog entry (no missing/extra codes)', () => {
+    const catalogCodes = new Set<string>(
+      ERROR_CODE_CATALOG.map((entry) => entry.code),
+    );
+    const enumCodes = new Set<string>(Object.values(ErrorCode));
+
+    const missingFromCatalog = [...enumCodes].filter(
+      (code) => !catalogCodes.has(code),
+    );
+    const extraInCatalog = [...catalogCodes].filter(
+      (code) => !enumCodes.has(code),
+    );
+
+    expect({
+      missingFromCatalog: missingFromCatalog.sort(),
+      extraInCatalog: extraInCatalog.sort(),
+    }).toEqual({ missingFromCatalog: [], extraInCatalog: [] });
+
     for (const code of Object.values(ErrorCode)) {
       const entry = getErrorCodeEntry(code);
 
