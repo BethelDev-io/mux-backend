@@ -6,7 +6,25 @@ export interface AuthPayload {
   authProvider: AuthProvider;
 }
 
+/**
+ * Plain payload shape inspected by {@link AuthPayloadValidator}.
+ */
+export interface AuthPayload {
+  authId?: string;
+  email?: string;
+  displayName?: string;
+  authProvider?: AuthProvider | string | null;
+  network?: string;
+}
+
+/**
+ * Validates authentication payloads from identity providers.
+ *
+ * Fail-closed: invalid or missing claims are rejected.
+ */
 export class AuthPayloadValidator {
+  private static readonly logger = new Logger(AuthPayloadValidator.name);
+
   /**
    * Fail-closed: invalid or missing claims are rejected.
    */
@@ -52,6 +70,11 @@ export class AuthOrchestratorService {
   private readonly logger = new Logger(AuthOrchestratorService.name);
 
   validatePayload(payload: Partial<AuthPayload> | null | undefined): boolean {
+    if (!payload || !payload.authId) {
+      this.logger.warn('Missing authId in payload');
+      return false;
+    }
+
     try {
       AuthPayloadValidator.validate(payload);
       return true;
