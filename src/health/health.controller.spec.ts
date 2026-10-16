@@ -8,7 +8,9 @@ describe('HealthController', () => {
   let prisma: { $queryRaw: jest.Mock };
 
   beforeEach(async () => {
-    prisma = { $queryRaw: jest.fn() };
+    prisma = {
+      $queryRaw: jest.fn().mockResolvedValue([{ '?column?': 1 }]),
+    };
 
     const module: TestingModule = await Test.createTestingModule({
       controllers: [HealthController],
@@ -60,6 +62,9 @@ describe('HealthController', () => {
         expect(JSON.stringify(payload)).not.toContain('ECONNREFUSED');
         expect(payload).not.toHaveProperty('error');
       }
+    });
+  });
+});
     });
   });
 });

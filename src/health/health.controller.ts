@@ -22,12 +22,16 @@ export class HealthController {
   @Get('ready')
   async ready() {
     try {
+      const start = performance.now();
       await this.prisma.$queryRaw`SELECT 1`;
-
+      const responseTime = Math.round(performance.now() - start);
       return {
         status: 'ready',
         timestamp: new Date().toISOString(),
-        database: { connected: true },
+        database: {
+          connected: true,
+          responseTime,
+        },
       };
     } catch {
       throw new ServiceUnavailableException({
