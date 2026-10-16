@@ -28,13 +28,32 @@ const ALLOWED_TRANSITIONS: Record<string, PaymentStatus[]> = {
  *  - findAll() / findOne() always filter by developerOwnerId → no cross-developer leakage.
  *  - update() re-checks ownership before mutating; 404 is returned even if the record
  *    exists but belongs to a different developer (avoid enumeration).
+ *  - remove() re-checks ownership before deleting; a non-owned id yields 404 and
+ *    performs no mutation, matching findOne().
  *  - update() validates every status mutation against ALLOWED_TRANSITIONS so terminal
  *    states (CONFIRMED, FAILED) are genuinely immutable.
+ *
  *  - Idempotency key uniqueness is enforced at the DB level; the service returns the
  *    cached response instead of re-executing on conflict, but only when the cached
  *    payment belongs to the requesting developer.
  *  - Feature-flagged: if PAYMENT_ISOLATION_ENABLED !== 'true' the guard is bypassed
  *    in development to allow gradual rollout without breaking existing callers.
+ *
+ * #1104 – Receiver wallet validation.
+ *  - The receiver wallet must exist and be ACTIVE, mirroring the send
+ *  - Idempotency key uniqueness is enforced at the DB level; the service returns the
+ *    cached response instead of re-executing on conflict, but only when the cached
+ *    payment belongs to the requesting developer.
+ *  - Feature-flagged: if PAYMENT_ISOLATION_ENABLED !== 'true' the guard is bypassed
+ *    in development to allow gradual rollout without breaking existing callers.
+ *
+ * #1104 – Receiver wallet validation.
+ *  - The receiver wallet must exist and be ACTIVE, mirroring the sender checks.
+ *  - Receiver ownership is intentionally NOT scoped to the calling developer:
+ *    payments are a transfer primitive and a developer may legitimately pay a
+ *    wallet owned by another developer (e.g. marketplace payouts, refunds to a
+ *    counterparty). Cross-developer receivers are therefore allowed by design;
+ *    only the sender wallet is subject to the developerOwnerId isolation guard.
  */
 @Injectable()
 export class PaymentsService {
@@ -129,11 +148,22 @@ export class PaymentsService {
       }
     }
 
-    // Validate receiver wallet exists (status not enforced for receiver)
-    await this.walletsService.findWalletById(receiverWalletId);
+    // ── Receiver wallet validation ─────────────────────────────────────────
+    // The receiver must exist and be ACTIVE, mirroring the sender checks.
+    // Ownership is intentionally not enforced here: cross-developer receivers
+    // are allowed by design (see class doc comment).
+    const receiverWallet =
+      await this.walletsService.findWalletById(receiverWalletId);
+    if (receiverWallet.status !== WalletStatus.ACTIVE) {
+      throw new BadRequestException(
+        `Receiver wallet is not active (status: ${receiverWallet.status})`,
+      );
+    }
 
-    // Scope limits check to the wallet owner (legacy userId)
-    await this.limitsService.checkLimits(fromId, amount);
+    // Enforce wallet-scoped spending limits against the sender wallet UUID.
+    // Runs after the ACTIVE-status and ownership checks and before the payment
+    // row is created, so a rejected payment leaves no row behind.
+    await this.limitsService.checkLimits(walletId, amount);
 
     const correlationId = crypto.randomUUID();
 
@@ -238,7 +268,33 @@ export class PaymentsService {
     });
   }
 
-  remove(id: string) {
-    return `This action removes payment ${id}`;
+  /**
+   * Deletes a payment, asserting ownership when isolation is enabled.
+   * A non-owned id yields 404 (matching findOne) and performs no mutation,
+   * so a developer cannot delete another developer's payment by guessing ids.
+   */
+  async remove(id: string, developerOwnerId?: string) {
+    const payment = await this.prisma.payment.findUnique({
+      where: { id: Number(id) },
+    });
+
+    if (!payment) {
+      throw new NotFoundException(`Payment #${id} not found`);
+    }
+
+    if (
+      this.isolationEnabled &&
+      developerOwnerId &&
+      payment.developerOwnerId &&
+      payment.developerOwnerId !== developerOwnerId
+    ) {
+      // Intentional 404 — do not reveal cross-developer record existence.
+      this.logger.warn(
+        `Cross-developer delete attempt on payment ${id} by developer ${developerOwnerId}`,
+      );
+      throw new NotFoundException(`Payment #${id} not found`);
+    }
+
+    return this.prisma.payment.delete({ where: { id: Number(id) } });
   }
 }

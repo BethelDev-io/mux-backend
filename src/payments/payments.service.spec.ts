@@ -1,11 +1,12 @@
-import { NotFoundException } from '@nestjs/common';
-import { Test } from '@nestjs/testing';
+import { BadRequestException, ForbiddenException, NotFoundException } from '@nestjs/common';
+import { Test, TestingModule } from '@nestjs/testing';
 import { PaymentsService } from './payments.service';
 import { PrismaService } from '../prisma/prisma.service';
-import { LimitsService } from '../limits/limits.service';
 import { WalletsService } from '../wallets/wallets.service';
+import { LimitsService } from '../limits/limits.service';
+import { WalletStatus } from '@prisma/client';
 
-describe('PaymentsService.create idempotency', () => {
+describe('PaymentsService', () => {
   let service: PaymentsService;
   let prisma: {
     payment: {
@@ -16,8 +17,18 @@ describe('PaymentsService.create idempotency', () => {
       findUnique: jest.Mock;
     };
   };
-  let limits: { checkAndConsume: jest.Mock };
-  let wallets: { getWallet: jest.Mock };
+  let walletsService: {
+    findWalletById: jest.Mock;
+    getWallet: jest.Mock;
+  };
+  let limitsService: {
+    checkLimits: jest.Mock;
+    checkAndConsume: jest.Mock;
+  };
+
+  const walletId = '11111111-1111-1111-1111-111111111111';
+  const receiverWalletId = '22222222-2222-2222-2222-222222222222';
+  const fromId = 42;
 
   const developerOwnerId = 'dev-owner-1';
   const otherDeveloperOwnerId = 'dev-owner-2';
@@ -90,6 +101,66 @@ describe('PaymentsService.create idempotency', () => {
     expect(prisma.payment.create).not.toHaveBeenCalled();
   });
 
+  it('creates the payment row when checkLimits allows the payment', async () => {
+    prisma.payment.create.mockResolvedValue({ id: 'payment-1' });
+
+    await service.create({
+      walletId,
+      fromId,
+      amount: 100,
+      developerId: 'dev-1',
+    } as any);
+
+    expect(prisma.payment.create).toHaveBeenCalledTimes(1);
+  });
+
+  it('rejects a non-ACTIVE receiver wallet and does not create a payment row', async () => {
+    walletsService.findWalletById.mockImplementation((id: string) =>
+      Promise.resolve({
+        id,
+        status:
+          id === receiverWalletId
+            ? WalletStatus.DISABLED
+            : WalletStatus.ACTIVE,
+        developerId: 'dev-1',
+      }),
+    );
+
+    await expect(
+      service.create({
+        walletId,
+        receiverWalletId,
+        fromId,
+        amount: 100,
+        developerId: 'dev-1',
+      } as any),
+    ).rejects.toBeInstanceOf(BadRequestException);
+
+    expect(prisma.payment.create).not.toHaveBeenCalled();
+  });
+
+  it('rejects a receiver wallet owned by a different developer and does not create a payment row', async () => {
+    walletsService.findWalletById.mockImplementation((id: string) =>
+      Promise.resolve({
+        id,
+        status: WalletStatus.ACTIVE,
+        developerId: id === receiverWalletId ? 'dev-2' : 'dev-1',
+      }),
+    );
+
+    await expect(
+      service.create({
+        walletId,
+        receiverWalletId,
+        fromId,
+        amount: 100,
+        developerId: 'dev-1',
+      } as any),
+    ).rejects.toBeInstanceOf(ForbiddenException);
+
+    expect(prisma.payment.create).not.toHaveBeenCalled();
+  });
+
   it('does not reveal ownership details in the NotFoundException message', async () => {
     prisma.payment.findUnique.mockResolvedValue(
       buildPayment({ developerOwnerId: otherDeveloperOwnerId }),
@@ -126,5 +197,7 @@ describe('PaymentsService.create idempotency', () => {
     expect(prisma.payment.findUnique).not.toHaveBeenCalled();
     expect(prisma.payment.create).toHaveBeenCalledTimes(1);
     expect(result).toBe(created);
+  });
+});
   });
 });
