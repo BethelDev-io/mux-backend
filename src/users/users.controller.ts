@@ -5,6 +5,9 @@ import {
   Param,
   Post,
   UseGuards,
+  Request,
+  Logger,
+  UnauthorizedException,
 } from '@nestjs/common';
 import {
   ApiOperation,
@@ -72,7 +75,24 @@ export class UsersController {
     const network = body.network ?? 'TESTNET';
     const idempotencyKey = body.idempotencyKey ?? this.generateIdempotencyKey();
 
+    // Extract actor context from the API key validation result. This throws
+    // before any user is created or idempotency record is written when the
+    // authenticated API key cannot be resolved to a developer.
+    const actorContext = this.extractActorContext(req);
+
     return this.usersService.findOrCreateUser({
+      authId,
+      network,
+      idempotencyKey,
+    });
+  }
+
+    // Extract actor context from the API key validation result. This throws
+    // before any user is created or idempotency record is written when the
+    // authenticated API key cannot be resolved to a developer.
+    const actorContext = this.extractActorContext(req);
+
+    const result = await this.usersService.findOrCreateUser({
       authId,
       network,
       idempotencyKey,
@@ -89,5 +109,20 @@ export class UsersController {
 
   private generateIdempotencyKey(): string {
     return `${Date.now()}-${Math.random().toString(36).slice(2)}`;
+  }
+
+  private extractActorContext(req: any) {
+    const developerId = req.apiKey?.developer?.id;
+    if (!developerId) {
+      throw new UnauthorizedException(
+        'Authenticated API key is not associated with a developer',
+      );
+    }
+
+    return {
+      actorId: developerId,
+      actorType: 'api_key' as const,
+      roles: req.apiKey?.project?.roles ?? [],
+    };
   }
 }
