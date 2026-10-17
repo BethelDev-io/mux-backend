@@ -67,11 +67,39 @@ export interface RegisterWalletResult {
   correlationId: string;
 }
 
+/**
+ * Redact a wallet address into a stable, non-reversible short form.
+ *
+ * Returns a fixed-length prefix plus suffix (e.g. `GABC…WXYZ`) so logs never
+ * contain the full address. Never throws: empty, short, or non-string input
+ * yields a safe placeholder.
+ */
+export function redactAddress(address: unknown): string {
+  if (typeof address !== 'string' || address.length === 0) {
+    return '[redacted]';
+  }
+  const prefixLen = 4;
+  const suffixLen = 4;
+  // Short inputs cannot be split without echoing the whole value.
+  if (address.length <= prefixLen + suffixLen) {
+    return '[redacted]';
+  }
+  return `${address.slice(0, prefixLen)}…${address.slice(-suffixLen)}`;
+}
+
 @Injectable()
 export class WalletService {
   private readonly logger = new Logger(WalletService.name);
 
   constructor(private readonly prisma: PrismaService) {}
+
+  /**
+   * Redact a wallet address for logging. Delegates to the pure module-level
+   * helper so behaviour is directly testable.
+   */
+  private redactAddress(address: unknown): string {
+    return redactAddress(address);
+  }
 
   /**
    * Register a new wallet, enforcing address uniqueness.
@@ -226,173 +254,6 @@ export class WalletService {
             throw new ForbiddenException({
               code: WalletSuccessorErrorCode.NOT_AUTHORIZED,
               message: 'Delegate/guardian is not authorized for this wallet',
-              correlationId,
-            });
-          }
-        }
+              correla
 
-        // Idempotency: replaying the same assignment is a no-op success.
-        if ((wallet.successorId ?? null) === (successorId ?? null)) {
-          return { walletId, successorId: successorId ?? null, correlationId };
-        }
-
-        if (successorId !== null) {
-          if (successorId === walletId) {
-            throw new BadRequestException({
-              code: WalletSuccessorErrorCode.SELF_REFERENCE,
-              message: 'A wallet cannot be its own successor',
-              correlationId,
-            });
-          }
-
-          const successor = await tx.wallet.findUnique({
-            where: { id: successorId },
-            select: { id: true, ownerId: true },
-          });
-          if (!successor) {
-            throw new NotFoundException({
-              code: WalletSuccessorErrorCode.SUCCESSOR_NOT_FOUND,
-              message: `Successor wallet ${successorId} not found`,
-              correlationId,
-            });
-          }
-          if (successor.ownerId !== wallet.ownerId) {
-            throw new ForbiddenException({
-              code: WalletSuccessorErrorCode.NOT_AUTHORIZED,
-              message: 'Successor must be owned by the same owner',
-              correlationId,
-            });
-          }
-
-          // Cycle detection: walk the successor chain from the proposed
-          // successor; if we reach walletId, the assignment would create a cycle.
-          if (await this.wouldCreateCycle(tx, walletId, successorId)) {
-            throw new ConflictException({
-              code: WalletSuccessorErrorCode.SUCCESSOR_CYCLE,
-              message: 'Successor assignment would create a cycle',
-              correlationId,
-            });
-          }
-        }
-
-        await tx.wallet.update({
-          where: { id: walletId },
-          data: { successorId: successorId ?? null },
-        });
-
-        this.logger.log(
-          `successor.set wallet=${walletId} successor=${successorId ?? 'null'} role=${actor.role} correlationId=${correlationId}`,
-        );
-
-        return { walletId, successorId: successorId ?? null, correlationId };
-      });
-    } catch (err) {
-      // Fail-closed: surface dependency outages as 503, never silently succeed.
-      if (this.isDependencyError(err)) {
-        this.logger.error(
-          `successor.set dependency failure wallet=${walletId} correlationId=${correlationId}`,
-        );
-        throw new ServiceUnavailableException({
-          code: WalletSuccessorErrorCode.DEPENDENCY_UNAVAILABLE,
-          message: 'Wallet store unavailable; write rejected',
-          correlationId,
-        });
-      }
-      throw err;
-    }
-  }
-
-  /**
-   * Clear the successor for a wallet. Idempotent.
-   */
-  async clearSuccessor(
-    walletId: string,
-    actor: SuccessorActor,
-  ): Promise<SetSuccessorResult> {
-    return this.setSuccessor(walletId, null, actor);
-  }
-
-  /**
-   * Walk the successor chain from `startId`; return true if it reaches `targetId`.
-   * Bounded to avoid unbounded traversal on corrupt data.
-   */
-  private async wouldCreateCycle(
-    tx: Prisma.TransactionClient,
-    targetId: string,
-    startId: string,
-  ): Promise<boolean> {
-    const MAX_DEPTH = 64;
-    let current: string | null = startId;
-    const seen = new Set<string>();
-    for (let depth = 0; depth < MAX_DEPTH && current; depth++) {
-      if (current === targetId) {
-        return true;
-      }
-      if (seen.has(current)) {
-        // Pre-existing cycle in stored data; treat as unsafe.
-        return true;
-      }
-      seen.add(current);
-      const next: { successorId: string | null } | null =
-        await tx.wallet.findUnique({
-          where: { id: current },
-          select: { successorId: true },
-        });
-      current = next?.successorId ?? null;
-    }
-    return false;
-  }
-
-  /**
-   * Verify that a delegate/guardian is authorized for the given wallet.
-   * Deny-by-default: absence of an explicit grant returns false.
-   */
-  private async isAuthorizedDelegate(
-    tx: Prisma.TransactionClient,
-    walletId: string,
-    subjectId: string,
-    role: 'delegate' | 'guardian',
-  ): Promise<boolean> {
-    const grant = await tx.walletDelegate.findFirst({
-      where: { walletId, subjectId, role, revokedAt: null },
-      select: { id: true },
-    });
-    return grant !== null;
-  }
-
-  /**
-   * Detect Prisma unique-constraint violations (P2002). Used to map the
-   * address uniqueness race to a stable error code.
-   */
-  private isUniqueConstraintError(err: unknown): boolean {
-    return (
-      err instanceof Prisma.PrismaClientKnownRequestError &&
-      err.code === 'P2002'
-    );
-  }
-
-  /**
-   * Detect dependency/connectivity failures so writes can fail closed.
-   */
-  private isDependencyError(err: unknown): boolean {
-    if (err instanceof Prisma.PrismaClientInitializationError) {
-      return true;
-    }
-    if (err instanceof Prisma.PrismaClientKnownRequestError) {
-      // P1001/P1002/P1008/P1017: connection / reachability failures.
-      return ['P1001', 'P1002', 'P1008', 'P1017'].includes(err.code);
-    }
-    return false;
-  }
-
-  /**
-   * Redact a wallet address for logs: keep a short prefix/suffix only.
-   * Never log raw key material or full addresses.
-   */
-  private redactAddress(address: string): string {
-    if (!address || address.length <= 10) {
-      return '***';
-    }
-    return `${address.slice(0, 6)}…${address.slice(-4)}`;
-  }
-}
+/* … truncated 5427 chars — edit only what you need near the top … */
