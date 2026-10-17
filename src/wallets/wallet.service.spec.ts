@@ -1,7 +1,8 @@
 import { Test, TestingModule } from '@nestjs/testing';
-import { Logger } from '@nestjs/common';
+import { BadRequestException, Logger } from '@nestjs/common';
 import { WalletService } from './wallet.service';
 import { PrismaService } from '../prisma/prisma.service';
+import { WalletSuccessorErrorCode } from './wallet-successor.error-code';
 
 describe('WalletService', () => {
   let service: WalletService;
@@ -81,6 +82,49 @@ describe('WalletService', () => {
       expect(loggedMessages).not.toContain(fullAddress);
 
       logSpy.mockRestore();
+    });
+  });
+
+  describe('registerWallet address validation', () => {
+    const validAddress =
+      'GBRPYHIL2CI3FNQ4BXLFMNDLFJUNPU2HY3ZMFSHONUCEOASW7QC7OX2H';
+    // Same address with a corrupted trailing checksum character.
+    const corruptedChecksumAddress =
+      'GBRPYHIL2CI3FNQ4BXLFMNDLFJUNPU2HY3ZMFSHONUCEOASW7QC7OX2X';
+
+    const expectInvalidAddress = async (address: string) => {
+      await expect(service.registerWallet(address)).rejects.toBeInstanceOf(
+        BadRequestException,
+      );
+      await expect(service.registerWallet(address)).rejects.toMatchObject({
+        response: expect.objectContaining({
+          code: WalletSuccessorErrorCode.WALLET_ADDRESS_INVALID,
+        }),
+      });
+      expect(prismaMock.wallet.create).not.toHaveBeenCalled();
+    };
+
+    it('accepts a valid Stellar address and proceeds to create', async () => {
+      prismaMock.wallet.findUnique.mockResolvedValue(null);
+      prismaMock.wallet.create.mockResolvedValue({
+        id: 'wallet-1',
+        address: validAddress,
+      });
+
+      await expect(service.registerWallet(validAddress)).resolves.toBeDefined();
+      expect(prismaMock.wallet.create).toHaveBeenCalledTimes(1);
+    });
+
+    it('rejects an address with a corrupted checksum', async () => {
+      await expectInvalidAddress(corruptedChecksumAddress);
+    });
+
+    it('rejects an empty string', async () => {
+      await expectInvalidAddress('');
+    });
+
+    it('rejects a non-Stellar string', async () => {
+      await expectInvalidAddress('not-a-stellar-address');
     });
   });
 });

@@ -12,6 +12,7 @@ import { PrismaService } from '../prisma/prisma.service';
 // `@prisma/client` only exists for the legacy default output path.
 import { Wallet, Prisma } from '../generated/prisma/client';
 import { randomUUID } from 'crypto';
+import { isValidStellarAddress } from '../key-management/utils/strkey.helper';
 
 /**
  * Stable error codes for wallet successor operations.
@@ -26,6 +27,7 @@ export const WalletSuccessorErrorCode = {
   NOT_AUTHORIZED: 'NOT_AUTHORIZED',
   DEPENDENCY_UNAVAILABLE: 'DEPENDENCY_UNAVAILABLE',
   WALLET_ADDRESS_ALREADY_EXISTS: 'WALLET_ADDRESS_ALREADY_EXISTS',
+  WALLET_ADDRESS_INVALID: 'WALLET_ADDRESS_INVALID',
 } as const;
 
 export type WalletSuccessorErrorCode =
@@ -106,6 +108,9 @@ export class WalletService {
    *
    * Invariants enforced:
    *  - Caller must be the owner (deny-by-default for other roles).
+   *  - Wallet address must be a valid Stellar StrKey; malformed values are
+   *    rejected with a stable error code (WALLET_ADDRESS_INVALID) before any
+   *    database write.
    *  - Wallet address must be unique; duplicates map to a stable error code
    *    (WALLET_ADDRESS_ALREADY_EXISTS) rather than a raw DB error.
    *  - Idempotent under concurrent/replayed requests: the unique constraint
@@ -127,6 +132,19 @@ export class WalletService {
       throw new ForbiddenException({
         code: WalletSuccessorErrorCode.NOT_AUTHORIZED,
         message: 'Caller is not authorized to register a wallet',
+        correlationId,
+      });
+    }
+
+    // Reject malformed addresses before any database write. Reuses the shared
+    // StrKey helper so checksum logic is not duplicated here.
+    if (!isValidStellarAddress(input.address)) {
+      this.logger.warn(
+        `wallet.register invalid address=${this.redactAddress(input.address)} correlationId=${correlationId}`,
+      );
+      throw new BadRequestException({
+        code: WalletSuccessorErrorCode.WALLET_ADDRESS_INVALID,
+        message: 'Wallet address is not a valid Stellar address',
         correlationId,
       });
     }
@@ -229,31 +247,6 @@ export class WalletService {
         if (!wallet) {
           throw new NotFoundException({
             code: WalletSuccessorErrorCode.WALLET_NOT_FOUND,
-            message: `Wallet ${walletId} not found`,
-            correlationId,
-          });
-        }
+            message: `Wallet ${walletId} not f
 
-        // Authorization: owner must match, or caller must be an authorized
-        // delegate/guardian recorded on the wallet.
-        if (actor.role === 'owner' && wallet.ownerId !== actor.subjectId) {
-          throw new ForbiddenException({
-            code: WalletSuccessorErrorCode.NOT_AUTHORIZED,
-            message: 'Caller does not own this wallet',
-            correlationId,
-          });
-        }
-        if (actor.role !== 'owner') {
-          const authorized = await this.isAuthorizedDelegate(
-            tx,
-            walletId,
-            actor.subjectId,
-            actor.role,
-          );
-          if (!authorized) {
-            throw new ForbiddenException({
-              code: WalletSuccessorErrorCode.NOT_AUTHORIZED,
-              message: 'Delegate/guardian is not authorized for this wallet',
-              correla
-
-/* … truncated 5427 chars — edit only what you need near the top … */
+/* … truncated 979 chars — edit only what you need near the top … */
